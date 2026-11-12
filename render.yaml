@@ -1,0 +1,27 @@
+# Render Blueprint for the backend API.
+# Render: New > Blueprint > pick this repo. It asks for the values marked sync: false.
+services:
+  - type: web
+    name: support-ticket-api
+    runtime: python
+    region: frankfurt
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:create_app --factory --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Restricted support_app role via the Supabase Session pooler. Entered in the dashboard, never committed.
+      - key: DATABASE_URL
+        sync: false
+      # Exact frontend URL(s), comma-separated. Never "*".
+      - key: CORS_ORIGINS
+        sync: false
+      # Render generates a random 256-bit secret.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ACCESS_TOKEN_MINUTES
+        value: "30"
+      - key: ENVIRONMENT
+        value: production

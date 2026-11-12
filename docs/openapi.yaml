@@ -1,0 +1,590 @@
+openapi: 3.1.0
+info:
+  title: Support Ticket System API
+  version: 1.0.0
+  description: |
+    Helpdesk backend. Customers open and follow their own tickets; staff manage all tickets.
+
+    Auth: send `Authorization: Bearer <access_token>` (JWT from POST /auth/login).
+    Tokens are short-lived (default 30 minutes). There are no refresh tokens in the MVP.
+
+    Access rules (enforced on the server):
+    - Customers can only see and comment on tickets they opened.
+      Requesting someone else's ticket returns 404, not 403, so the response
+      does not reveal that the ticket exists.
+    - Only customers can open tickets. Only staff can update status or assignee.
+    - Public registration always creates a customer. Staff accounts are created
+      by the owner with a separate script, never through the API.
+
+    Every error uses the same shape: `{"error": {"code": "...", "message": "..."}}`.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: health
+  - name: auth
+  - name: tickets
+  - name: comments
+  - name: staff
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness check
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register a customer account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created (always role "customer")
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Exchange email and password for an access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          description: Wrong email or password (same message for both, to avoid revealing which emails exist)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: The currently logged-in user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /staff:
+    get:
+      tags: [staff]
+      summary: List staff members (for the assign dropdown). Staff only.
+      responses:
+        "200":
+          description: All staff users
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /tickets:
+    get:
+      tags: [tickets]
+      summary: List tickets
+      description: |
+        Customers get only their own tickets. Staff get all tickets.
+        Newest first. The `assignee` filter is staff only (403 for customers).
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/TicketStatus"
+        - name: assignee
+          in: query
+          required: false
+          description: '"me" (assigned to you), "none" (unassigned), or a staff user id. Staff only.'
+          schema:
+            type: string
+            examples: [me, none, 3f1c2a9e-8b7d-4c6e-9a1b-2d3e4f5a6b7c]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: A page of tickets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [tickets]
+      summary: Open a ticket. Customers only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TicketCreate"
+      responses:
+        "201":
+          description: Ticket created with status "open" and no assignee
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ticket"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /tickets/{ticket_id}:
+    parameters:
+      - $ref: "#/components/parameters/TicketId"
+    get:
+      tags: [tickets]
+      summary: Get one ticket (owner or staff)
+      responses:
+        "200":
+          description: The ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ticket"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    patch:
+      tags: [tickets]
+      summary: Change status and/or assignee. Staff only.
+      description: |
+        Send at least one field. `assignee_id: null` unassigns.
+        The assignee must be a staff user (422 otherwise).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TicketUpdate"
+      responses:
+        "200":
+          description: The updated ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Ticket"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /tickets/{ticket_id}/comments:
+    parameters:
+      - $ref: "#/components/parameters/TicketId"
+    get:
+      tags: [comments]
+      summary: List a ticket's comments, oldest first (owner or staff)
+      responses:
+        "200":
+          description: The comment thread
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Comment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [comments]
+      summary: Add a comment (owner or staff)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommentCreate"
+      responses:
+        "201":
+          description: Comment added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TicketId:
+      name: ticket_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Role:
+      type: string
+      enum: [customer, staff]
+
+    TicketStatus:
+      type: string
+      enum: [open, in_progress, resolved]
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, name, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          const: bearer
+        expires_in:
+          type: integer
+          description: Seconds until the token expires
+
+    User:
+      type: object
+      required: [id, email, name, role, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        created_at:
+          type: string
+          format: date-time
+
+    UserSummary:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+
+    TicketCreate:
+      type: object
+      additionalProperties: false
+      required: [title, description]
+      properties:
+        title:
+          type: string
+          minLength: 5
+          maxLength: 120
+        description:
+          type: string
+          minLength: 10
+          maxLength: 5000
+
+    TicketUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        status:
+          $ref: "#/components/schemas/TicketStatus"
+        assignee_id:
+          type: [string, "null"]
+          format: uuid
+
+    Ticket:
+      type: object
+      required: [id, title, description, status, customer, assignee, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: "#/components/schemas/TicketStatus"
+        customer:
+          $ref: "#/components/schemas/UserSummary"
+        assignee:
+          oneOf:
+            - $ref: "#/components/schemas/UserSummary"
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TicketList:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Ticket"
+        total:
+          type: integer
+          description: Total matching tickets, ignoring limit/offset
+        limit:
+          type: integer
+        offset:
+          type: integer
+
+    CommentCreate:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+
+    Comment:
+      type: object
+      required: [id, ticket_id, author, body, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        ticket_id:
+          type: string
+          format: uuid
+        author:
+          type: object
+          required: [id, name, role]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            role:
+              $ref: "#/components/schemas/Role"
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [validation_error, unauthorized, forbidden, not_found, method_not_allowed, conflict, internal_error]
+            message:
+              type: string
+              description: Safe, human-readable message. Never contains SQL, stack traces or paths.
+            details:
+              type: array
+              description: Only on validation_error. One entry per invalid field.
+              items:
+                type: object
+                required: [field, message]
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+
+  responses:
+    ValidationError:
+      description: Request body, path or query parameter failed validation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing, invalid or expired token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Logged in, but your role is not allowed to do this
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Does not exist, or you are not allowed to see it
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Conflicts with existing data (e.g. email already registered)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InternalError:
+      description: Unexpected server error (details are logged server-side only)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
