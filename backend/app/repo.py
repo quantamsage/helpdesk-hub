@@ -7,8 +7,15 @@ from psycopg import Connection
 # A fixed column list (never user input), reused in several queries below.
 USER_COLUMNS = "id, email, name, role, created_at"
 
-TICKET_SELECT = """
-    SELECT t.id, t.title, t.description, t.status, t.created_at, t.updated_at,
+# Deadline for the first staff reply, and whether it has been missed.
+# A ticket is overdue while it is unresolved, has no staff reply yet, and the
+# deadline has passed. Computed in SQL so every list and page agrees.
+DUE_AT = "t.created_at + make_interval(hours => support_sla_hours(t.priority))"
+OVERDUE = f"(t.first_response_at IS NULL AND t.status <> 'resolved' AND now() > {DUE_AT})"
+
+TICKET_SELECT = f"""
+    SELECT t.id, t.title, t.description, t.status, t.priority, t.created_at, t.updated_at,
+           t.first_response_at, {DUE_AT} AS due_at, {OVERDUE} AS overdue,
            t.customer_id, c.name AS customer_name,
            t.assignee_id, a.name AS assignee_name
     FROM support_tickets t
@@ -17,7 +24,7 @@ TICKET_SELECT = """
 """
 
 COMMENT_SELECT = """
-    SELECT cm.id, cm.ticket_id, cm.body, cm.created_at,
+    SELECT cm.id, cm.ticket_id, cm.body, cm.internal, cm.created_at,
            u.id AS author_id, u.name AS author_name, u.role AS author_role
     FROM support_comments cm
     JOIN support_users u ON u.id = cm.author_id
@@ -84,6 +91,8 @@ def list_tickets(
     customer_id: UUID | None,
     status: str | None,
     assignee: UUID | str | None,  # a staff id, "none", or None for no filter
+    priority: str | None = None,
+    overdue: bool | None = None,
     limit: int,
     offset: int,
 ) -> tuple[list[dict], int]:
@@ -104,6 +113,13 @@ def list_tickets(
     elif assignee is not None:
         conditions.append("t.assignee_id = %(assignee_id)s")
         params["assignee_id"] = assignee
+    if priority is not None:
+        conditions.append("t.priority = %(priority)s")
+        params["priority"] = priority
+    if overdue is True:
+        conditions.append(OVERDUE)
+    elif overdue is False:
+        conditions.append(f"NOT {OVERDUE}")
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
 
     total = conn.execute("SELECT count(*) AS n FROM support_tickets t" + where, params).fetchone()["n"]
@@ -115,40 +131,59 @@ def list_tickets(
 
 
 def update_ticket(
-    conn: Connection, ticket_id: UUID, *, status: str | None, change_assignee: bool, assignee_id: UUID | None
+    conn: Connection,
+    ticket_id: UUID,
+    *,
+    status: str | None,
+    change_assignee: bool,
+    assignee_id: UUID | None,
+    priority: str | None = None,
 ) -> dict:
-    """status=None keeps the current status. change_assignee=False keeps the
+    """status/priority=None keep the current value. change_assignee=False keeps the
     current assignee (so we can tell "not sent" apart from "set to null")."""
     conn.execute(
         """UPDATE support_tickets
            SET status = COALESCE(%(status)s, status),
+               priority = COALESCE(%(priority)s, priority),
                assignee_id = CASE WHEN %(change_assignee)s THEN %(assignee_id)s::uuid ELSE assignee_id END,
                updated_at = now()
            WHERE id = %(id)s""",
-        {"id": ticket_id, "status": status, "change_assignee": change_assignee, "assignee_id": assignee_id},
+        {"id": ticket_id, "status": status, "priority": priority,
+         "change_assignee": change_assignee, "assignee_id": assignee_id},
     )
     return get_ticket(conn, ticket_id)
 
 
-def touch_ticket(conn: Connection, ticket_id: UUID) -> None:
-    """Bump updated_at, e.g. when someone comments."""
-    conn.execute("UPDATE support_tickets SET updated_at = now() WHERE id = %(id)s", {"id": ticket_id})
+def touch_ticket(conn: Connection, ticket_id: UUID, *, staff_replied: bool = False) -> None:
+    """Bump updated_at, e.g. when someone comments. A public staff reply also
+    records the first response time, once (later replies don't move it)."""
+    conn.execute(
+        """UPDATE support_tickets
+           SET updated_at = now(),
+               first_response_at = CASE WHEN %(staff_replied)s AND first_response_at IS NULL
+                                        THEN now() ELSE first_response_at END
+           WHERE id = %(id)s""",
+        {"id": ticket_id, "staff_replied": staff_replied},
+    )
 
 
 # ---- Comments ---------------------------------------------------------------
 
-def list_comments(conn: Connection, ticket_id: UUID) -> list[dict]:
+def list_comments(conn: Connection, ticket_id: UUID, *, include_internal: bool) -> list[dict]:
+    """include_internal=False is what customers get: internal notes are filtered
+    out in SQL, so they never even reach the API layer."""
+    visibility = "" if include_internal else " AND NOT cm.internal"
     return conn.execute(
-        COMMENT_SELECT + " WHERE cm.ticket_id = %(ticket_id)s ORDER BY cm.created_at, cm.id",
+        COMMENT_SELECT + " WHERE cm.ticket_id = %(ticket_id)s" + visibility + " ORDER BY cm.created_at, cm.id",
         {"ticket_id": ticket_id},
     ).fetchall()
 
 
-def create_comment(conn: Connection, ticket_id: UUID, author_id: UUID, body: str) -> dict:
+def create_comment(conn: Connection, ticket_id: UUID, author_id: UUID, body: str, internal: bool = False) -> dict:
     row = conn.execute(
-        """INSERT INTO support_comments (ticket_id, author_id, body)
-           VALUES (%(ticket_id)s, %(author_id)s, %(body)s)
+        """INSERT INTO support_comments (ticket_id, author_id, body, internal)
+           VALUES (%(ticket_id)s, %(author_id)s, %(body)s, %(internal)s)
            RETURNING id""",
-        {"ticket_id": ticket_id, "author_id": author_id, "body": body},
+        {"ticket_id": ticket_id, "author_id": author_id, "body": body, "internal": internal},
     ).fetchone()
     return conn.execute(COMMENT_SELECT + " WHERE cm.id = %(id)s", {"id": row["id"]}).fetchone()

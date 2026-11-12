@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
-  title: Support Ticket System API
-  version: 1.0.0
+  title: Helpdesk Hub API
+  version: 1.1.0
   description: |
     Helpdesk backend. Customers open and follow their own tickets; staff manage all tickets.
 
@@ -158,6 +158,17 @@ paths:
           required: false
           schema:
             $ref: "#/components/schemas/TicketStatus"
+        - name: priority
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/TicketPriority"
+        - name: overdue
+          in: query
+          required: false
+          description: true for tickets past their first-response deadline, false for the rest.
+          schema:
+            type: boolean
         - name: assignee
           in: query
           required: false
@@ -277,6 +288,7 @@ paths:
     get:
       tags: [comments]
       summary: List a ticket's comments, oldest first (owner or staff)
+      description: Internal notes are included for staff and never returned to customers.
       responses:
         "200":
           description: The comment thread
@@ -301,6 +313,9 @@ paths:
     post:
       tags: [comments]
       summary: Add a comment (owner or staff)
+      description: |
+        Staff may set `internal: true` to add a note customers can't see (403 for customers).
+        The first public staff reply sets the ticket's `first_response_at`.
       requestBody:
         required: true
         content:
@@ -316,6 +331,8 @@ paths:
                 $ref: "#/components/schemas/Comment"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "422":
@@ -347,6 +364,10 @@ components:
     TicketStatus:
       type: string
       enum: [open, in_progress, resolved]
+
+    TicketPriority:
+      type: string
+      enum: [low, normal, high, urgent]
 
     RegisterRequest:
       type: object
@@ -442,13 +463,16 @@ components:
       properties:
         status:
           $ref: "#/components/schemas/TicketStatus"
+        priority:
+          $ref: "#/components/schemas/TicketPriority"
         assignee_id:
           type: [string, "null"]
           format: uuid
 
     Ticket:
       type: object
-      required: [id, title, description, status, customer, assignee, created_at, updated_at]
+      required: [id, title, description, status, priority, customer, assignee, created_at, updated_at,
+                 first_response_at, due_at, overdue]
       properties:
         id:
           type: string
@@ -459,6 +483,8 @@ components:
           type: string
         status:
           $ref: "#/components/schemas/TicketStatus"
+        priority:
+          $ref: "#/components/schemas/TicketPriority"
         customer:
           $ref: "#/components/schemas/UserSummary"
         assignee:
@@ -471,6 +497,17 @@ components:
         updated_at:
           type: string
           format: date-time
+        first_response_at:
+          type: [string, "null"]
+          format: date-time
+          description: When staff first replied publicly; null until then.
+        due_at:
+          type: string
+          format: date-time
+          description: First-response deadline (urgent 2h, high 8h, normal 24h, low 72h after opening).
+        overdue:
+          type: boolean
+          description: Unresolved, no staff reply yet, and past due_at.
 
     TicketList:
       type: object
@@ -497,10 +534,14 @@ components:
           type: string
           minLength: 1
           maxLength: 2000
+        internal:
+          type: boolean
+          default: false
+          description: Staff-only note hidden from the customer.
 
     Comment:
       type: object
-      required: [id, ticket_id, author, body, created_at]
+      required: [id, ticket_id, author, body, internal, created_at]
       properties:
         id:
           type: string
@@ -521,6 +562,8 @@ components:
               $ref: "#/components/schemas/Role"
         body:
           type: string
+        internal:
+          type: boolean
         created_at:
           type: string
           format: date-time

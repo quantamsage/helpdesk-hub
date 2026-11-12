@@ -4,6 +4,8 @@ Access rules:
 - Customers see and comment on their OWN tickets only. Anyone else's ticket
   is reported as "not found", so its existence isn't revealed.
 - Staff see every ticket and are the only ones who can change it.
+- Internal notes are staff-only: customers never receive them and cannot
+  create them.
 """
 from typing import Annotated
 from uuid import UUID
@@ -15,7 +17,9 @@ from .. import repo
 from ..db import DbConn
 from ..deps import CurrentUser, CustomerUser, StaffUser
 from ..errors import ApiError, field_error, not_found
-from ..schemas import Comment, CommentCreate, CommentList, Ticket, TicketCreate, TicketList, TicketStatus, TicketUpdate
+from ..schemas import (
+    Comment, CommentCreate, CommentList, Ticket, TicketCreate, TicketList, TicketPriority, TicketStatus, TicketUpdate,
+)
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -41,10 +45,14 @@ def ticket_out(row: dict) -> dict:
         "title": row["title"],
         "description": row["description"],
         "status": row["status"],
+        "priority": row["priority"],
         "customer": {"id": row["customer_id"], "name": row["customer_name"]},
         "assignee": assignee,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "first_response_at": row["first_response_at"],
+        "due_at": row["due_at"],
+        "overdue": row["overdue"],
     }
 
 
@@ -54,6 +62,7 @@ def comment_out(row: dict) -> dict:
         "ticket_id": row["ticket_id"],
         "author": {"id": row["author_id"], "name": row["author_name"], "role": row["author_role"]},
         "body": row["body"],
+        "internal": row["internal"],
         "created_at": row["created_at"],
     }
 
@@ -82,6 +91,8 @@ def list_tickets(
     conn: DbConn,
     status: TicketStatus | None = None,
     assignee: Annotated[str | None, Query(max_length=36)] = None,
+    priority: TicketPriority | None = None,
+    overdue: bool | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
@@ -91,6 +102,8 @@ def list_tickets(
         customer_id=user["id"] if user["role"] == "customer" else None,
         status=status,
         assignee=parse_assignee_filter(assignee, user),
+        priority=priority,
+        overdue=overdue,
         limit=limit,
         offset=offset,
     )
@@ -116,7 +129,8 @@ def update_ticket(ticket_id: UUID, body: TicketUpdate, user: StaffUser, conn: Db
         raise field_error("assignee_id", "Tickets can only be assigned to a staff member.")
 
     row = repo.update_ticket(
-        conn, ticket_id, status=body.status, change_assignee=change_assignee, assignee_id=body.assignee_id
+        conn, ticket_id, status=body.status, priority=body.priority,
+        change_assignee=change_assignee, assignee_id=body.assignee_id,
     )
     return ticket_out(row)
 
@@ -126,12 +140,19 @@ def update_ticket(ticket_id: UUID, body: TicketUpdate, user: StaffUser, conn: Db
 @router.get("/{ticket_id}/comments", response_model=CommentList)
 def list_comments(ticket_id: UUID, user: CurrentUser, conn: DbConn):
     get_visible_ticket(conn, ticket_id, user)
-    return {"items": [comment_out(r) for r in repo.list_comments(conn, ticket_id)]}
+    rows = repo.list_comments(conn, ticket_id, include_internal=user["role"] == "staff")
+    return {"items": [comment_out(r) for r in rows]}
 
 
 @router.post("/{ticket_id}/comments", status_code=201, response_model=Comment)
 def add_comment(ticket_id: UUID, body: CommentCreate, user: CurrentUser, conn: DbConn):
     get_visible_ticket(conn, ticket_id, user)
-    comment = repo.create_comment(conn, ticket_id, user["id"], body.body)
-    repo.touch_ticket(conn, ticket_id)  # a reply counts as activity on the ticket
+    is_staff = user["role"] == "staff"
+    if body.internal and not is_staff:
+        raise ApiError(403, "forbidden", "Only staff can add internal notes.")
+    comment = repo.create_comment(conn, ticket_id, user["id"], body.body, internal=body.internal)
+    if not body.internal:
+        # A public reply counts as activity; a staff one also stops the SLA clock.
+        # Internal notes change neither, so customers don't see a phantom update.
+        repo.touch_ticket(conn, ticket_id, staff_replied=is_staff)
     return comment_out(comment)
