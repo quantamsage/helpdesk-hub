@@ -5,7 +5,7 @@ import { Header } from "@/components/Header";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Helpdesk",
+  title: "Helpdesk Hub",
   description: "Open a support ticket and follow it until it's resolved.",
 };
 

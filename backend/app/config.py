@@ -27,7 +27,7 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    load_dotenv()  # reads backend/.env locally; does nothing on Render
+    load_dotenv()  # reads backend/.env locally; does nothing when real env vars are set
 
     jwt_secret = _required("JWT_SECRET")
     if len(jwt_secret) < 32:

@@ -32,7 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Interactive docs only in development. The contract is docs/openapi.yaml.
     docs_on = not settings.is_production
     app = FastAPI(
-        title="Support Ticket System API",
+        title="Helpdesk Hub API",
         lifespan=lifespan,
         docs_url="/docs" if docs_on else None,
         redoc_url=None,
