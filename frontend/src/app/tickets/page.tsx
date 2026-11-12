@@ -7,8 +7,8 @@ import { FormError } from "@/components/FormError";
 import { RequireLogin } from "@/components/RequireLogin";
 import { TicketRow } from "@/components/TicketRow";
 import { ApiError, api } from "@/lib/api";
-import { STATUS_LABELS } from "@/lib/format";
-import type { TicketList, TicketStatus, User, UserSummary } from "@/lib/types";
+import { PRIORITY_LABELS, STATUS_LABELS } from "@/lib/format";
+import type { TicketList, TicketPriority, TicketStatus, User, UserSummary } from "@/lib/types";
 
 const PAGE_SIZE = 20;
 
@@ -20,6 +20,8 @@ function Tickets({ user }: { user: User }) {
   const isStaff = user.role === "staff";
   const [status, setStatus] = useState("");
   const [assignee, setAssignee] = useState("");
+  const [priority, setPriority] = useState("");
+  const [overdueOnly, setOverdueOnly] = useState(false);
   const [offset, setOffset] = useState(0);
   const [data, setData] = useState<TicketList | null>(null);
   const [staff, setStaff] = useState<UserSummary[]>([]);
@@ -35,10 +37,10 @@ function Tickets({ user }: { user: User }) {
   useEffect(() => {
     setError(null);
     api
-      .listTickets({ status, assignee, limit: PAGE_SIZE, offset })
+      .listTickets({ status, assignee, priority, overdue: overdueOnly, limit: PAGE_SIZE, offset })
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load tickets."));
-  }, [status, assignee, offset]);
+  }, [status, assignee, priority, overdueOnly, offset]);
 
   function changeFilter(update: () => void) {
     update();
@@ -85,11 +87,34 @@ function Tickets({ user }: { user: User }) {
             </select>
           </label>
         )}
+        {isStaff && (
+          <label>
+            Priority
+            <select value={priority} onChange={(e) => changeFilter(() => setPriority(e.target.value))}>
+              <option value="">Any priority</option>
+              {(Object.keys(PRIORITY_LABELS) as TicketPriority[]).map((p) => (
+                <option key={p} value={p}>
+                  {PRIORITY_LABELS[p]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isStaff && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={overdueOnly}
+              onChange={(e) => changeFilter(() => setOverdueOnly(e.target.checked))}
+            />
+            Overdue only
+          </label>
+        )}
       </div>
 
       <FormError message={error} />
       {!data && !error && <p className="muted">Loading tickets…</p>}
-      {data && data.items.length === 0 && <EmptyState isStaff={isStaff} filtered={Boolean(status || assignee)} />}
+      {data && data.items.length === 0 && <EmptyState isStaff={isStaff} filtered={Boolean(status || assignee || priority || overdueOnly)} />}
       {data && data.items.length > 0 && (
         <>
           <ul className="ticket-list">

@@ -6,10 +6,11 @@ import { useCallback, useEffect, useState } from "react";
 
 import { FormError } from "@/components/FormError";
 import { RequireLogin } from "@/components/RequireLogin";
+import { DueNote, PriorityTag } from "@/components/PriorityTag";
 import { StatusStamp } from "@/components/StatusStamp";
 import { ApiError, api } from "@/lib/api";
-import { STATUS_LABELS, formatDate } from "@/lib/format";
-import type { Comment, Ticket, TicketStatus, User, UserSummary } from "@/lib/types";
+import { PRIORITY_LABELS, STATUS_LABELS, formatDate } from "@/lib/format";
+import type { Comment, Ticket, TicketPriority, TicketStatus, User, UserSummary } from "@/lib/types";
 
 export default function TicketPage() {
   const { id } = useParams<{ id: string }>();
@@ -66,13 +67,19 @@ function TicketDetail({ id, user }: { id: string; user: User }) {
         Opened by {ticket.customer.name} on {formatDate(ticket.created_at)}.{" "}
         {ticket.assignee ? `Assigned to ${ticket.assignee.name}.` : "Not assigned yet."}
       </p>
+      {user.role === "staff" && (
+        <p className="ticket-meta">
+          <PriorityTag priority={ticket.priority} /> <DueNote ticket={ticket} />
+          {ticket.first_response_at && <>First replied {formatDate(ticket.first_response_at)}.</>}
+        </p>
+      )}
       <div className="description">{ticket.description}</div>
 
       {user.role === "staff" && <StaffControls ticket={ticket} onSaved={setTicket} />}
 
       <h2>Conversation</h2>
       <Thread comments={comments} />
-      <ReplyForm ticketId={ticket.id} onSent={load} />
+      <ReplyForm ticketId={ticket.id} isStaff={user.role === "staff"} onSent={load} />
     </section>
   );
 }
@@ -80,6 +87,7 @@ function TicketDetail({ id, user }: { id: string; user: User }) {
 function StaffControls({ ticket, onSaved }: { ticket: Ticket; onSaved: (t: Ticket) => void }) {
   const [staff, setStaff] = useState<UserSummary[]>([]);
   const [status, setStatus] = useState<TicketStatus>(ticket.status);
+  const [priority, setPriority] = useState<TicketPriority>(ticket.priority);
   const [assigneeId, setAssigneeId] = useState(ticket.assignee?.id ?? "");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,14 +97,15 @@ function StaffControls({ ticket, onSaved }: { ticket: Ticket; onSaved: (t: Ticke
     api.listStaff().then((r) => setStaff(r.items)).catch(() => setStaff([]));
   }, []);
 
-  const unchanged = status === ticket.status && assigneeId === (ticket.assignee?.id ?? "");
+  const unchanged =
+    status === ticket.status && priority === ticket.priority && assigneeId === (ticket.assignee?.id ?? "");
 
   async function save() {
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      const updated = await api.updateTicket(ticket.id, { status, assignee_id: assigneeId || null });
+      const updated = await api.updateTicket(ticket.id, { status, priority, assignee_id: assigneeId || null });
       onSaved(updated);
       setMessage("Changes saved.");
     } catch (err) {
@@ -120,6 +129,22 @@ function StaffControls({ ticket, onSaved }: { ticket: Ticket; onSaved: (t: Ticke
           {(Object.keys(STATUS_LABELS) as TicketStatus[]).map((s) => (
             <option key={s} value={s}>
               {STATUS_LABELS[s]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Priority
+        <select
+          value={priority}
+          onChange={(e) => {
+            setPriority(e.target.value as TicketPriority);
+            setMessage(null);
+          }}
+        >
+          {(Object.keys(PRIORITY_LABELS) as TicketPriority[]).map((p) => (
+            <option key={p} value={p}>
+              {PRIORITY_LABELS[p]}
             </option>
           ))}
         </select>
@@ -159,10 +184,14 @@ function Thread({ comments }: { comments: Comment[] }) {
   return (
     <ol className="thread">
       {comments.map((c) => (
-        <li key={c.id} className={c.author.role === "staff" ? "reply reply-staff" : "reply"}>
+        <li
+          key={c.id}
+          className={c.internal ? "reply reply-internal" : c.author.role === "staff" ? "reply reply-staff" : "reply"}
+        >
           <p className="reply-meta">
             <strong>{c.author.name}</strong>
             {c.author.role === "staff" && <span className="role-tag">Staff</span>}
+            {c.internal && <span className="role-tag internal-tag">Internal note</span>}
             <span className="muted"> {formatDate(c.created_at)}</span>
           </p>
           <p className="reply-body">{c.body}</p>
@@ -172,8 +201,17 @@ function Thread({ comments }: { comments: Comment[] }) {
   );
 }
 
-function ReplyForm({ ticketId, onSent }: { ticketId: string; onSent: () => Promise<void> }) {
+function ReplyForm({
+  ticketId,
+  isStaff,
+  onSent,
+}: {
+  ticketId: string;
+  isStaff: boolean;
+  onSent: () => Promise<void>;
+}) {
   const [body, setBody] = useState("");
+  const [internal, setInternal] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -182,7 +220,7 @@ function ReplyForm({ ticketId, onSent }: { ticketId: string; onSent: () => Promi
     setBusy(true);
     setError(null);
     try {
-      await api.addComment(ticketId, body);
+      await api.addComment(ticketId, body, isStaff && internal);
       setBody("");
       await onSent();
     } catch (err) {
@@ -193,14 +231,20 @@ function ReplyForm({ ticketId, onSent }: { ticketId: string; onSent: () => Promi
   }
 
   return (
-    <form onSubmit={handleSubmit} className="form reply-form" noValidate>
+    <form onSubmit={handleSubmit} className={internal ? "form reply-form reply-form-internal" : "form reply-form"} noValidate>
       <label>
-        Your reply
+        {internal ? "Internal note (only staff will see this)" : "Your reply"}
         <textarea rows={4} maxLength={2000} value={body} onChange={(e) => setBody(e.target.value)} />
       </label>
+      {isStaff && (
+        <label className="check">
+          <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
+          Internal note, hidden from the customer
+        </label>
+      )}
       <FormError message={error} />
       <button type="submit" className="button" disabled={busy || body.trim() === ""}>
-        {busy ? "Sending…" : "Send reply"}
+        {busy ? "Saving…" : internal ? "Add note" : "Send reply"}
       </button>
     </form>
   );
