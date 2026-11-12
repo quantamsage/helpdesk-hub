@@ -2,7 +2,7 @@
 // Every request goes over HTTP(S) to the API; the frontend never sees the database.
 
 import { clearToken, getToken } from "./session";
-import type { Comment, FieldError, Ticket, TicketList, TicketStatus, User, UserSummary } from "./types";
+import type { Comment, FieldError, Ticket, TicketList, TicketPriority, TicketStatus, User, UserSummary } from "./types";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
@@ -69,10 +69,19 @@ export const api = {
 
   listStaff: () => request<{ items: UserSummary[] }>("/staff"),
 
-  listTickets: (filters: { status?: string; assignee?: string; limit: number; offset: number }) => {
+  listTickets: (filters: {
+    status?: string;
+    assignee?: string;
+    priority?: string;
+    overdue?: boolean;
+    limit: number;
+    offset: number;
+  }) => {
     const params = new URLSearchParams();
     if (filters.status) params.set("status", filters.status);
     if (filters.assignee) params.set("assignee", filters.assignee);
+    if (filters.priority) params.set("priority", filters.priority);
+    if (filters.overdue) params.set("overdue", "true");
     params.set("limit", String(filters.limit));
     params.set("offset", String(filters.offset));
     return request<TicketList>(`/tickets?${params}`);
@@ -83,11 +92,14 @@ export const api = {
 
   getTicket: (id: string) => request<Ticket>(`/tickets/${encodeURIComponent(id)}`),
 
-  updateTicket: (id: string, changes: { status?: TicketStatus; assignee_id?: string | null }) =>
+  updateTicket: (
+    id: string,
+    changes: { status?: TicketStatus; priority?: TicketPriority; assignee_id?: string | null },
+  ) =>
     request<Ticket>(`/tickets/${encodeURIComponent(id)}`, { method: "PATCH", body: changes }),
 
   listComments: (id: string) => request<{ items: Comment[] }>(`/tickets/${encodeURIComponent(id)}/comments`),
 
-  addComment: (id: string, body: string) =>
-    request<Comment>(`/tickets/${encodeURIComponent(id)}/comments`, { method: "POST", body: { body } }),
+  addComment: (id: string, body: string, internal = false) =>
+    request<Comment>(`/tickets/${encodeURIComponent(id)}/comments`, { method: "POST", body: { body, internal } }),
 };

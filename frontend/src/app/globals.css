@@ -11,6 +11,8 @@
   --progress: #9a6510;
   --resolved: #2d6e4b;
   --danger: #a8322a;
+  --note: #fff6d6;
+  --note-rule: #d9b84a;
   --focus: #2b5ba6;
   --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --radius-sm: 3px;
@@ -465,4 +467,79 @@ textarea {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ---- Priority, deadlines and internal notes ----------------------------- */
+.priority {
+  display: inline-block;
+  margin-right: 0.5rem;
+  padding: 0 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--rule);
+  color: var(--ink-soft);
+  vertical-align: middle;
+}
+
+.priority-high {
+  color: var(--progress);
+  border-color: var(--progress);
+}
+
+.priority-urgent {
+  color: var(--sheet);
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.due {
+  color: var(--ink-soft);
+}
+
+.overdue {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.ticket-row-overdue {
+  border-left: 4px solid var(--danger);
+}
+
+.reply-internal {
+  background: var(--note);
+  border-color: var(--note-rule);
+  border-style: dashed;
+}
+
+.internal-tag {
+  background: var(--note-rule);
+  color: var(--ink);
+}
+
+.reply-form-internal textarea {
+  background: var(--note);
+}
+
+label.check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: normal;
+}
+
+/* Checkboxes must not inherit the 100% width text inputs get. */
+label.check input {
+  width: auto;
+  flex: none;
+  margin: 0;
+}
+
+.filters label.check {
+  min-width: 0;
+  align-self: flex-end;
+  padding-bottom: 0.65rem;
 }

@@ -11,6 +11,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, Str
 
 Role = Literal["customer", "staff"]
 TicketStatus = Literal["open", "in_progress", "resolved"]
+TicketPriority = Literal["low", "normal", "high", "urgent"]
 
 
 def _normalise_email(email: str) -> str:
@@ -51,20 +52,25 @@ class TicketCreate(RequestModel):
 
 class TicketUpdate(RequestModel):
     status: TicketStatus | None = None
+    priority: TicketPriority | None = None
     assignee_id: UUID | None = None  # explicit null means "unassign"
 
     @model_validator(mode="after")
     def check_fields(self):
         sent = self.model_fields_set  # fields actually present in the JSON
         if not sent:
-            raise ValueError("Send at least one of: status, assignee_id.")
+            raise ValueError("Send at least one of: status, priority, assignee_id.")
         if "status" in sent and self.status is None:
             raise ValueError("status cannot be null.")
+        if "priority" in sent and self.priority is None:
+            raise ValueError("priority cannot be null.")
         return self
 
 
 class CommentCreate(RequestModel):
     body: trimmed(1, 2000)
+    # Staff-only. A customer sending true gets a 403.
+    internal: bool = False
 
 
 # ---- Responses --------------------------------------------------------------
@@ -101,10 +107,14 @@ class Ticket(BaseModel):
     title: str
     description: str
     status: TicketStatus
+    priority: TicketPriority
     customer: UserSummary
     assignee: UserSummary | None
     created_at: datetime
     updated_at: datetime
+    first_response_at: datetime | None
+    due_at: datetime
+    overdue: bool
 
 
 class TicketList(BaseModel):
@@ -125,6 +135,7 @@ class Comment(BaseModel):
     ticket_id: UUID
     author: CommentAuthor
     body: str
+    internal: bool
     created_at: datetime
 
 

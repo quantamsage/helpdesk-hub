@@ -2,18 +2,28 @@ import Link from "next/link";
 
 import { formatDate } from "@/lib/format";
 import type { Ticket } from "@/lib/types";
+import { DueNote, PriorityTag } from "./PriorityTag";
 import { StatusStamp } from "./StatusStamp";
 
 export function TicketRow({ ticket, showCustomer }: { ticket: Ticket; showCustomer: boolean }) {
   return (
-    <li className="ticket-row">
+    <li className={ticket.overdue && showCustomer ? "ticket-row ticket-row-overdue" : "ticket-row"}>
       <Link href={`/tickets/${ticket.id}`} className="ticket-link">
         <span className="ticket-main">
-          <span className="ticket-title">{ticket.title}</span>
+          <span className="ticket-title">
+            {showCustomer && <PriorityTag priority={ticket.priority} />}
+            {ticket.title}
+          </span>
           <span className="ticket-meta">
             {showCustomer && <>From {ticket.customer.name}. </>}
             Updated {formatDate(ticket.updated_at)}.{" "}
             {ticket.assignee ? `Assigned to ${ticket.assignee.name}.` : "Not assigned yet."}
+            {showCustomer && (
+              <>
+                {" "}
+                <DueNote ticket={ticket} />
+              </>
+            )}
           </span>
         </span>
         <StatusStamp status={ticket.status} />

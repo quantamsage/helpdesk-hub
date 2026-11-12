@@ -2,6 +2,7 @@
 
 export type Role = "customer" | "staff";
 export type TicketStatus = "open" | "in_progress" | "resolved";
+export type TicketPriority = "low" | "normal" | "high" | "urgent";
 
 export interface User {
   id: string;
@@ -21,10 +22,14 @@ export interface Ticket {
   title: string;
   description: string;
   status: TicketStatus;
+  priority: TicketPriority;
   customer: UserSummary;
   assignee: UserSummary | null;
   created_at: string;
   updated_at: string;
+  first_response_at: string | null;
+  due_at: string;
+  overdue: boolean;
 }
 
 export interface TicketList {
@@ -39,6 +44,7 @@ export interface Comment {
   ticket_id: string;
   author: UserSummary & { role: Role };
   body: string;
+  internal: boolean;
   created_at: string;
 }
 
