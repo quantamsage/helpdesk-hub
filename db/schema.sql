@@ -1,4 +1,4 @@
--- Support Ticket System: database schema
+-- Helpdesk Hub: database schema
 --
 -- Run ONCE as the database owner (Supabase: SQL Editor, which runs as "postgres").
 -- The backend never runs this file. It connects as the restricted role
@@ -46,10 +46,16 @@ CREATE TABLE support_tickets (
     description text        NOT NULL CHECK (char_length(description) BETWEEN 10 AND 5000),
     status      text        NOT NULL DEFAULT 'open'
                             CHECK (status IN ('open', 'in_progress', 'resolved')),
+    -- Set by staff. Drives the response deadline (see support_sla_hours below).
+    priority    text        NOT NULL DEFAULT 'normal'
+                            CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+    -- When staff first replied publicly. NULL until then. Internal notes don't count.
+    first_response_at timestamptz NULL,
     created_at  timestamptz NOT NULL DEFAULT now(),
     -- Set by the backend on every update (no trigger, to keep it simple).
     updated_at  timestamptz NOT NULL DEFAULT now(),
-    CHECK (updated_at >= created_at)
+    CHECK (updated_at >= created_at),
+    CHECK (first_response_at IS NULL OR first_response_at >= created_at)
 );
 
 -- Index: a customer's "My tickets" page filters by customer_id and sorts
@@ -63,6 +69,23 @@ CREATE INDEX support_tickets_assignee_idx ON support_tickets (assignee_id);
 -- Index: the staff dashboard filters by status and sorts newest first.
 CREATE INDEX support_tickets_status_idx ON support_tickets (status, created_at DESC);
 
+-- Index: the "overdue" filter only looks at tickets still waiting for a first reply.
+CREATE INDEX support_tickets_awaiting_idx ON support_tickets (priority, created_at)
+    WHERE first_response_at IS NULL AND status <> 'resolved';
+
+-- ---------------------------------------------------------------------------
+-- Response targets (SLA): hours from opening to the first staff reply.
+-- A function, not a column, so changing a ticket's priority moves its deadline.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION support_sla_hours(priority text) RETURNS integer
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+    RETURN CASE priority
+        WHEN 'urgent' THEN 2
+        WHEN 'high'   THEN 8
+        WHEN 'normal' THEN 24
+        ELSE 72
+    END;
+
 -- ---------------------------------------------------------------------------
 -- Comments: the reply thread on a ticket.
 -- ---------------------------------------------------------------------------
@@ -72,6 +95,8 @@ CREATE TABLE support_comments (
     ticket_id  uuid        NOT NULL REFERENCES support_tickets (id) ON DELETE CASCADE,
     author_id  uuid        NOT NULL REFERENCES support_users (id) ON DELETE RESTRICT,
     body       text        NOT NULL CHECK (char_length(body) BETWEEN 1 AND 2000),
+    -- Internal notes are staff-only. The backend never returns them to customers.
+    internal   boolean     NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -97,6 +122,7 @@ END
 $$;
 
 GRANT USAGE ON SCHEMA public TO support_app;
+GRANT EXECUTE ON FUNCTION support_sla_hours(text) TO support_app;
 -- Can't create tables (PostgreSQL 15+ already blocks this; explicit for older versions).
 REVOKE CREATE ON SCHEMA public FROM support_app;
 
@@ -111,11 +137,11 @@ GRANT INSERT (email, name, password_hash) ON support_users TO support_app;
 -- fields staff can change. No DELETE.
 GRANT SELECT ON support_tickets TO support_app;
 GRANT INSERT (customer_id, title, description) ON support_tickets TO support_app;
-GRANT UPDATE (status, assignee_id, updated_at) ON support_tickets TO support_app;
+GRANT UPDATE (status, assignee_id, priority, first_response_at, updated_at) ON support_tickets TO support_app;
 
 -- Comments: read and add. No editing or deleting.
 GRANT SELECT ON support_comments TO support_app;
-GRANT INSERT (ticket_id, author_id, body) ON support_comments TO support_app;
+GRANT INSERT (ticket_id, author_id, body, internal) ON support_comments TO support_app;
 
 -- ---------------------------------------------------------------------------
 -- Row-level security
