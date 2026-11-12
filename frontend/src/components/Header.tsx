@@ -18,7 +18,7 @@ export function Header() {
     <header className="site-header">
       <div className="site-header-inner">
         <Link href={user ? "/tickets" : "/login"} className="brand">
-          Helpdesk
+          Helpdesk Hub
         </Link>
         {user && (
           <nav className="header-nav">
